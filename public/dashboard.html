@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>WatchPrice 实时仪表板</title>
+  <style>
+    body {
+      font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      background:#020617;
+      color:#e2e8f0;
+      margin:0;
+      padding:24px;
+    }
+    header {
+      display:flex;
+      flex-wrap:wrap;
+      justify-content:space-between;
+      align-items:center;
+      gap:12px;
+    }
+    header h1 {
+      margin:0;
+      font-weight:600;
+    }
+    .controls {
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    input,select {
+      background:#0f172a;
+      border:1px solid #334155;
+      color:#e2e8f0;
+      padding:6px 10px;
+      border-radius:6px;
+    }
+    canvas {
+      background:#0f172a;
+      border:1px solid #1e293b;
+      border-radius:6px;
+      margin-top:24px;
+    }
+    table {
+      width:100%;
+      border-collapse:collapse;
+      margin-top:20px;
+      color:#cbd5f5;
+    }
+    th,td {
+      border-bottom:1px solid #1e293b;
+      padding:8px 6px;
+      text-align:left;
+    }
+    .status {
+      margin-top:14px;
+      display:flex;
+      flex-wrap:wrap;
+      gap:14px;
+    }
+    .status div {
+      padding:6px 12px;
+      border-radius:8px;
+      border:1px solid #334155;
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+    .badge {
+      width:8px;
+      height:8px;
+      border-radius:50%;
+      background:#34d399;
+      display:inline-block;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>WatchPrice 实时仪表板</h1>
+      <div class="status">
+        <div><span class="badge"></span> 代码: <span id="codeLabel">sh601288</span></div>
+        <div>更新时间: <span id="timeLabel">-</span></div>
+      </div>
+    </div>
+    <div class="controls">
+      <label>
+        股票:
+        <input id="codeInput" value="sh601288" />
+      </label>
+      <label>
+        条数:
+        <select id="limitSelect">
+          <option value="60">60</option>
+          <option value="120" selected>120</option>
+          <option value="240">240</option>
+        </select>
+      </label>
+      <button id="refreshBtn">刷新</button>
+      <button id="saveBtn">保存到 watchlist</button>
+    </div>
+  </header>
+
+  <canvas id="priceChart" height="320"></canvas>
+  <canvas id="rsiChart" height="240"></canvas>
+
+  <section>
+    <h2>当前指标</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>指标</th>
+          <th>数值</th>
+        </tr>
+      </thead>
+      <tbody id="indicatorTable">
+        <tr><td colspan="2">尚未获取</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    const priceCtx = document.getElementById('priceChart').getContext('2d');
+    const rsiCtx = document.getElementById('rsiChart').getContext('2d');
+    const codeInput = document.getElementById('codeInput');
+    const limitSelect = document.getElementById('limitSelect');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const codeLabel = document.getElementById('codeLabel');
+    const timeLabel = document.getElementById('timeLabel');
+    const indicatorTable = document.getElementById('indicatorTable');
+
+    let priceChart = new Chart(priceCtx, {
+      type:'line',
+      data:{
+        labels:[],
+        datasets:[{
+          label:'价格',
+          borderColor:'#38bdf8',
+          backgroundColor:'rgba(56,189,248,0.2)',
+          tension:0.2,
+          borderWidth:2,
+          data:[]
+        }]
+      },
+      options:{
+        animation:false,
+        scales:{
+          x:{ ticks:{ color:'#94a3b8' } },
+          y:{ ticks:{ color:'#94a3b8' } }
+        }
+      }
+    });
+
+    let rsiChart = new Chart(rsiCtx, {
+      type:'line',
+      data:{
+        labels:[],
+        datasets:[{
+          label:'RSI',
+          borderColor:'#f472b6',
+          backgroundColor:'rgba(244,114,182,0.2)',
+          tension:0.2,
+          borderWidth:2,
+          data:[]
+        }]
+      },
+      options:{
+        animation:false,
+        scales:{
+          x:{ ticks:{ color:'#94a3b8' } },
+          y:{ ticks:{ color:'#94a3b8' }, suggestedMin:0, suggestedMax:100 }
+        }
+      }
+    });
+
+    function formatIndicators(data) {
+      if (!data) return '<tr><td colspan="2">尚未获取</td></tr>';
+      const entries = [
+        ['RSI', data.rsi?.value ?? data.rsi ?? 'N/A'],
+        ['MACD', data.macd?.macd ?? 'N/A'],
+        ['MACD signal', data.macd?.signal ?? 'N/A'],
+        ['MACD histogram', data.macd?.histogram ?? 'N/A'],
+        ['趋势', data.macd?.signalType ?? 'N/A'],
+        ['KDJ K', data.kdj?.k ?? 'N/A'],
+        ['KDJ D', data.kdj?.d ?? 'N/A'],
+        ['KDJ J', data.kdj?.j ?? 'N/A'],
+        ['KDJ 信号', data.kdj?.signal ?? 'N/A'],
+        ['DK', data.dk?.value ?? 'N/A'],
+        ['DK 信号', data.dk?.signal ?? 'N/A']
+      ];
+      return entries.map(entry => `<tr><td>${entry[0]}</td><td>${entry[1]}</td></tr>`).join('');
+    }
+
+    async function refresh() {
+      const code = codeInput.value.trim() || 'sh601288';
+      const limit = Number(limitSelect.value) || 120;
+      codeLabel.textContent = code;
+      const [historyRes, latestRes] = await Promise.all([
+        fetch(`/api/history?code=${encodeURIComponent(code)}&limit=${limit}`),
+        fetch(`/api/latest?code=${encodeURIComponent(code)}`)
+      ]);
+      const historyPayload = await historyRes.json();
+      const latestPayload = await latestRes.json();
+      const labels = historyPayload.data.map(entry => entry.timestamp);
+      const priceData = historyPayload.data.map(entry => entry.price);
+      const rsiData = historyPayload.data.map(entry => entry.indicators?.rsi?.value ?? entry.indicators?.rsi ?? null);
+      priceChart.data.labels = labels;
+      priceChart.data.datasets[0].data = priceData;
+      priceChart.update();
+      rsiChart.data.labels = labels;
+      rsiChart.data.datasets[0].data = rsiData;
+      rsiChart.update();
+      timeLabel.textContent = new Date(latestPayload.timestamp).toLocaleString();
+      indicatorTable.innerHTML = formatIndicators(latestPayload.indicators);
+    }
+
+    refreshBtn.addEventListener('click', () => refresh());
+    setInterval(refresh, 5000);
+    refresh();
+
+    const saveBtn = document.getElementById('saveBtn');
+    saveBtn.addEventListener('click', async () => {
+      const code = codeInput.value.trim();
+      if (!code) return;
+      const res = await fetch('/api/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+      });
+      const payload = await res.json();
+      alert(payload.message || payload.error || '已提交');
+    });
+  </script>
+</body>
+</html>
