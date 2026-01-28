@@ -3,12 +3,12 @@
     {
       "name": "农业银行",
       "code": "sh601288",
-      "source": "auto"
+      "source": "tencent"
     },
     {
       "name": "宗申动力",
       "code": "sz001696",
-      "source": "auto"
+      "source": "tencent"
     }
   ],
   "updateInterval": 5000,

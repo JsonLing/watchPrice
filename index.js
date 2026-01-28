@@ -16,7 +16,7 @@ const CONFIG_FILE = path.join(__dirname, 'config.json');
 const UPDATE_INTERVAL = 5000; // 5秒更新一次
 const ALERT_THRESHOLD_DEFAULT = 1; // 1% 价格变动发送桌面提醒
 const HISTORY_KLINE_LIMIT = 120;
-const HISTORY_CACHE_TTL = 60 * 60 * 1000; // 1 小时
+const HISTORY_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 小时
 const historyCache = new Map();
 const DB_FILE = path.join(__dirname, 'watchprice.db');
 const notificationCache = new Map(); // 缓存最近的提醒值
@@ -282,6 +282,29 @@ async function fetchStockHistory(code) {
 /**
  * 计算技术指标
  */
+function describeKdjSignal(kValue, jValue) {
+  const hasK = Number.isFinite(kValue);
+  const hasJ = Number.isFinite(jValue);
+
+  if (hasK && hasJ) {
+    if (kValue >= 80 && jValue >= 80) {
+      return '🔴 超买';
+    }
+    if (kValue <= 20 && jValue <= 20) {
+      return '🟢 超卖';
+    }
+    return '⚪ 正常';
+  }
+
+  if (hasK) {
+    if (kValue >= 80) return '🔴 超买';
+    if (kValue <= 20) return '🟢 超卖';
+    return '⚪ 正常';
+  }
+
+  return '⚪ 未知';
+}
+
 function calculateIndicators(klines) {
   if (!klines || klines.length < 30) {
     return null;
@@ -358,11 +381,21 @@ function calculateIndicators(klines) {
     const kdjResult = Stochastic.calculate(kdjInput);
     if (kdjResult && kdjResult.length > 0) {
       const latest = kdjResult[kdjResult.length - 1];
+      const kValue = Number(latest.k);
+      const dValue = Number(latest.d);
+      const jValueRaw = Number(latest.j);
+      const jValue =
+        Number.isFinite(jValueRaw) && !Number.isNaN(jValueRaw)
+          ? jValueRaw
+          : Number.isFinite(kValue) && Number.isFinite(dValue)
+            ? 3 * kValue - 2 * dValue
+            : null;
+      const signal = describeKdjSignal(kValue, jValue);
       indicators.kdj = {
-        k: latest.k?.toFixed(2) || 'N/A',
-        d: latest.d?.toFixed(2) || 'N/A',
-        j: latest.j?.toFixed(2) || 'N/A',
-        signal: latest.k > 80 ? '🔴 超买' : latest.k < 20 ? '🟢 超卖' : '⚪ 正常'
+        k: Number.isFinite(kValue) ? kValue.toFixed(2) : 'N/A',
+        d: Number.isFinite(dValue) ? dValue.toFixed(2) : 'N/A',
+        j: Number.isFinite(jValue) ? Number(jValue.toFixed(2)) : 'N/A',
+        signal
       };
     }
   } catch (error) {

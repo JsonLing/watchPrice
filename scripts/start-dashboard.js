@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { aggregateTimeseries } from '../lib/timeseries.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,6 +68,25 @@ app.get('/api/latest', (req, res) => {
     timestamp: row.timestamp,
     price: row.price,
     indicators: parseIndicators(row.indicators)
+  });
+});
+
+app.get('/api/timeseries', (req, res) => {
+  const code = (req.query.code || 'sh601288').trim();
+  const limit = Math.max(10, Number(req.query.limit) || 240);
+  const interval = Math.max(1, Number(req.query.interval) || 1);
+  const fetchLimit = Math.max(limit * 6, 200);
+  const rows = db
+    .prepare(
+      `SELECT timestamp, price, high, low, volume FROM price_records WHERE code = ? ORDER BY timestamp DESC LIMIT ?`
+    )
+    .all(code, fetchLimit);
+  const data = aggregateTimeseries(rows, { intervalMinutes: interval, limit });
+  res.json({
+    code,
+    intervalMinutes: interval,
+    limit,
+    data
   });
 });
 

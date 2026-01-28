@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
+    "export:timeseries": "node scripts/export-timeseries.js",
     "export:history": "node scripts/export-history.js",
     "export:all": "node scripts/export-all-history.js",
     "analyze:rsi": "node scripts/analyze-rsi.js",

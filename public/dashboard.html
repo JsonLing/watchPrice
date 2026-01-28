@@ -73,6 +73,19 @@
       background:#34d399;
       display:inline-block;
     }
+    .timeseries-meta {
+      margin-top:12px;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:16px;
+      color:#94a3b8;
+      font-size:14px;
+    }
+    .timeseries-meta strong {
+      display:block;
+      color:#e2e8f0;
+    }
   </style>
 </head>
 <body>
@@ -103,6 +116,14 @@
   </header>
 
   <canvas id="priceChart" height="320"></canvas>
+  <div class="timeseries-meta">
+    <div>
+      <strong>分时统计</strong>
+      <span id="timeseriesSummary">等待数据...</span>
+    </div>
+    <div id="timeseriesInterval">分钟级：1m</div>
+  </div>
+  <canvas id="volumeChart" height="160"></canvas>
   <canvas id="rsiChart" height="240"></canvas>
 
   <section>
@@ -123,6 +144,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     const priceCtx = document.getElementById('priceChart').getContext('2d');
+    const volumeCtx = document.getElementById('volumeChart').getContext('2d');
     const rsiCtx = document.getElementById('rsiChart').getContext('2d');
     const codeInput = document.getElementById('codeInput');
     const limitSelect = document.getElementById('limitSelect');
@@ -130,47 +152,86 @@
     const codeLabel = document.getElementById('codeLabel');
     const timeLabel = document.getElementById('timeLabel');
     const indicatorTable = document.getElementById('indicatorTable');
+    const timeseriesSummary = document.getElementById('timeseriesSummary');
+    const timeseriesInterval = document.getElementById('timeseriesInterval');
 
-    let priceChart = new Chart(priceCtx, {
-      type:'line',
-      data:{
-        labels:[],
-        datasets:[{
-          label:'价格',
-          borderColor:'#38bdf8',
-          backgroundColor:'rgba(56,189,248,0.2)',
-          tension:0.2,
-          borderWidth:2,
-          data:[]
-        }]
+    const priceChart = new Chart(priceCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: '收盘价',
+            borderColor: '#38bdf8',
+            backgroundColor: 'rgba(56,189,248,0.2)',
+            tension: 0.2,
+            borderWidth: 2,
+            data: []
+          },
+          {
+            label: '分时均价',
+            borderColor: '#a855f7',
+            backgroundColor: 'rgba(168,85,247,0.15)',
+            tension: 0.2,
+            borderWidth: 2,
+            borderDash: [6, 4],
+            data: []
+          }
+        ]
       },
-      options:{
-        animation:false,
-        scales:{
-          x:{ ticks:{ color:'#94a3b8' } },
-          y:{ ticks:{ color:'#94a3b8' } }
+      options: {
+        animation: false,
+        scales: {
+          x: { ticks: { color: '#94a3b8' } },
+          y: { ticks: { color: '#94a3b8' } }
         }
       }
     });
 
-    let rsiChart = new Chart(rsiCtx, {
-      type:'line',
-      data:{
-        labels:[],
-        datasets:[{
-          label:'RSI',
-          borderColor:'#f472b6',
-          backgroundColor:'rgba(244,114,182,0.2)',
-          tension:0.2,
-          borderWidth:2,
-          data:[]
+    const volumeChart = new Chart(volumeCtx, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: '成交量',
+            backgroundColor: 'rgba(16,185,129,0.4)',
+            borderColor: 'rgba(16,185,129,0.8)',
+            borderWidth: 1,
+            data: []
+          }
+        ]
+      },
+      options: {
+        animation: false,
+        scales: {
+          x: { ticks: { color: '#94a3b8' } },
+          y: { ticks: { color: '#94a3b8' }, beginAtZero: true }
+        },
+        plugins: {
+          legend: { display: false }
+        }
+      }
+    });
+
+    const rsiChart = new Chart(rsiCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'RSI',
+          borderColor: '#f472b6',
+          backgroundColor: 'rgba(244,114,182,0.2)',
+          tension: 0.2,
+          borderWidth: 2,
+          data: []
         }]
       },
-      options:{
-        animation:false,
-        scales:{
-          x:{ ticks:{ color:'#94a3b8' } },
-          y:{ ticks:{ color:'#94a3b8' }, suggestedMin:0, suggestedMax:100 }
+      options: {
+        animation: false,
+        scales: {
+          x: { ticks: { color: '#94a3b8' } },
+          y: { ticks: { color: '#94a3b8' }, suggestedMin: 0, suggestedMax: 100 }
         }
       }
     });
@@ -193,27 +254,62 @@
       return entries.map(entry => `<tr><td>${entry[0]}</td><td>${entry[1]}</td></tr>`).join('');
     }
 
+    function formatVolume(value) {
+      if (value == null || Number.isNaN(value)) return 'N/A';
+      if (value >= 10000) {
+        return `${(value / 10000).toFixed(2)}万`;
+      }
+      return value.toFixed ? value.toFixed(0) : value;
+    }
+
     async function refresh() {
       const code = codeInput.value.trim() || 'sh601288';
       const limit = Number(limitSelect.value) || 120;
       codeLabel.textContent = code;
-      const [historyRes, latestRes] = await Promise.all([
-        fetch(`/api/history?code=${encodeURIComponent(code)}&limit=${limit}`),
-        fetch(`/api/latest?code=${encodeURIComponent(code)}`)
+      const [latestRes, timeseriesRes] = await Promise.all([
+        fetch(`/api/latest?code=${encodeURIComponent(code)}`),
+        fetch(`/api/timeseries?code=${encodeURIComponent(code)}&limit=${limit}&interval=1`)
       ]);
-      const historyPayload = await historyRes.json();
-      const latestPayload = await latestRes.json();
-      const labels = historyPayload.data.map(entry => entry.timestamp);
-      const priceData = historyPayload.data.map(entry => entry.price);
-      const rsiData = historyPayload.data.map(entry => entry.indicators?.rsi?.value ?? entry.indicators?.rsi ?? null);
+
+      let latestPayload = null;
+      if (latestRes.ok) {
+        latestPayload = await latestRes.json();
+      }
+      const timeseriesPayload = timeseriesRes.ok ? await timeseriesRes.json() : { intervalMinutes: 1, data: [] };
+      const series = Array.isArray(timeseriesPayload.data) ? timeseriesPayload.data : [];
+      const labels = series.map(entry => {
+        const date = new Date(entry.timestamp);
+        return Number.isNaN(date.getTime()) ? entry.timestamp : date.toLocaleTimeString('zh-CN', { hour12: false });
+      });
+      const closeData = series.map(entry => entry.close ?? null);
+      const avgData = series.map(entry => entry.avgPrice ?? null);
+      const volumeData = series.map(entry => entry.volume ?? null);
       priceChart.data.labels = labels;
-      priceChart.data.datasets[0].data = priceData;
+      priceChart.data.datasets[0].data = closeData;
+      priceChart.data.datasets[1].data = avgData;
       priceChart.update();
-      rsiChart.data.labels = labels;
-      rsiChart.data.datasets[0].data = rsiData;
-      rsiChart.update();
-      timeLabel.textContent = new Date(latestPayload.timestamp).toLocaleString();
-      indicatorTable.innerHTML = formatIndicators(latestPayload.indicators);
+      volumeChart.data.labels = labels;
+      volumeChart.data.datasets[0].data = volumeData;
+      volumeChart.update();
+      timeseriesInterval.textContent = `分钟级：${timeseriesPayload.intervalMinutes ?? 1}m`;
+
+      const latestBucket = series.length ? series[series.length - 1] : null;
+      if (latestBucket) {
+        const amplitude = latestBucket.amplitude != null ? `${latestBucket.amplitude}%` : 'N/A';
+        const change = latestBucket.changePercent != null ? `${latestBucket.changePercent}%` : 'N/A';
+        const volumeLabel = formatVolume(latestBucket.volume);
+        timeseriesSummary.textContent = `最新振幅 ${amplitude} · 涨幅 ${change} · 成交 ${volumeLabel}`;
+      } else {
+        timeseriesSummary.textContent = '暂无分时数据';
+      }
+
+      if (latestPayload && latestPayload.timestamp) {
+        timeLabel.textContent = new Date(latestPayload.timestamp).toLocaleString();
+        indicatorTable.innerHTML = formatIndicators(latestPayload.indicators);
+      } else {
+        timeLabel.textContent = '-';
+        indicatorTable.innerHTML = '<tr><td colspan="2">暂无最新数据</td></tr>';
+      }
     }
 
     refreshBtn.addEventListener('click', () => refresh());

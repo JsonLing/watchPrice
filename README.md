@@ -54,8 +54,8 @@ npm install
 
 ## 技术指标（美股）
 
-服务会在获取美股定价后顺带从 Yahoo Finance 拉取日 K 数据，依赖 `technicalindicators` 计算 MACD、RSI、KDJ、DK，终端会直接输出这些指标的当前值及信号（超买/超卖、多头/空头）。由于历史数据仅从 Yahoo 拉取，该部分目前只在美股上可用。
-新版已经将 A 股/港股也纳入技术指标计算，先调用雪球/东方财富历史 K 线接口（`push2his.eastmoney.com`）再算指标，而且每只股票的日K只在本地 cache 一小时，避免频繁请求；只要 `config.json` 中是 `sh`, `sz` 或 `hk` 开头的代码，就可以同步看到 MACD、RSI、KDJ 和 DK，无需额外登录。
+服务会在获取美股定价后顺带从 Yahoo Finance 拉取日 K 数据，依赖 `technicalindicators` 计算 MACD、RSI、KDJ、DK，终端会直接输出这些指标的当前值及信号（超买/超卖、多头/空头）。KDJ 的信号现在同时参考 K 与 J 的交叉阈值，以避免单一线抖动导致的误报；只要 `config.json` 中是 `sh`, `sz` 或 `hk` 开头的代码，就可以同步看到 MACD、RSI、KDJ 和 DK，无需额外登录。
+新版已经将 A 股/港股也纳入技术指标计算，先调用雪球/东方财富历史 K 线接口（`push2his.eastmoney.com`）再算指标，而且每只股票的日K只在本地 cache 四小时，避免频繁请求；只要 `config.json` 中是 `sh`, `sz` 或 `hk` 开头的代码，就可以同步看到 MACD、RSI、KDJ 和 DK，无需额外登录。
 
 ## 桌面提醒（macOS）
 
@@ -123,6 +123,25 @@ npm run analyze:rsi -- --code=sh601288
 npm run analyze:rsi --code=AAPL
 ```
 
+### 分时分析脚本
+
+新增脚本 `scripts/export-timeseries.js` 会把指定股票的最新分时窗口（默认 1 分钟）按时间聚合成 OHLC、均价、成交量/振幅/涨幅等字段，支持 `json`/`csv`/`table` 输出：
+
+```bash
+npm run export:timeseries -- --code=sh601288 --limit=120
+npm run export:timeseries -- --code=AAPL --interval=5 --format=csv
+npm run export:timeseries -- --code=TSLA --limit=40 --format=table
+```
+
+可选参数：
+
+- `--code`: 股票代码，默认 `sh601288`
+- `--limit`: 最多输出多少个窗口，默认 `240`
+- `--interval`: 每个分时窗口的分钟数，默认 `1`
+- `--format`: 所需格式，`json`（默认）、`csv` 或 `table`
+
+该脚本依赖 `watchprice.db` 中的价格记录，适合在终端/脚本中导出分时数据对外部系统或研究做进一步分析。
+
 ### 指标检查脚本
 
 如果只想查看哪些历史记录已经成功附带了 `indicators`，可以运行 `scripts/show-indicators.js`，它会列出最近几条带指标的记录（支持 `--code`、`--limit` 和 `--format=json/table`）：
@@ -177,6 +196,8 @@ npm run dashboard
 服务也会监控 `config.json`，发生变化后会自动重新加载配置并立即开始监控新加入的股票，无需重启。
 
 生成的报告会保存为 `report-<code>.html`，可直接在浏览器打开查看。
+
+仪表板新增分时统计区域，会在价格图上叠加分时均价，下面显示成交量柱状图，并附带“最新振幅 / 涨幅 / 成交”摘要。前端通过 `GET /api/timeseries?code=<code>&limit=<n>&interval=<minutes>` 获取聚合后的分时窗口（默认 1 分钟），服务器会返回对应的振幅/涨幅/量值供图表和摘要使用。
 
 ## 输出示例
 
