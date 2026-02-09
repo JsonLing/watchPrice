@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
 import iconv from 'iconv-lite';
 import { MACD, RSI, Stochastic } from 'technicalindicators';
+import { calcTradingSignal } from './lib/trading-signal.js';
+import { fetchTimeseriesSeries, TIMESERIES_DEFAULTS } from './lib/timeseries.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,6 +49,41 @@ const insertRecord = db.prepare(`
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
+function getTimeseriesSummary(code, options = {}) {
+  return fetchTimeseriesSeries(db, code, {
+    intervalMinutes: options.intervalMinutes || TIMESERIES_DEFAULTS.intervalMinutes,
+    limit: options.limit || TIMESERIES_DEFAULTS.windowLimit
+  });
+}
+
+function formatTimeseriesSummary(series, intervalMinutes) {
+  if (!series.length) {
+    return '  分时：无有效窗口';
+  }
+  const latest = series[series.length - 1];
+  const amplitude =
+    latest.amplitude != null && Number.isFinite(latest.amplitude)
+      ? `${latest.amplitude > 0 ? '+' : ''}${latest.amplitude.toFixed(2)}%`
+      : 'N/A';
+  const change =
+    latest.changePercent != null && Number.isFinite(latest.changePercent)
+      ? `${latest.changePercent > 0 ? '+' : ''}${latest.changePercent.toFixed(2)}%`
+      : 'N/A';
+  const volumeLabel =
+    latest.volume != null && Number.isFinite(latest.volume)
+      ? latest.volume >= 10000
+        ? `${(latest.volume / 10000).toFixed(2)}万`
+        : `${latest.volume.toFixed(0)}`
+      : 'N/A';
+  return `  分时${series.length}段（${intervalMinutes}m）：振幅 ${amplitude} · 涨幅 ${change} · 成交 ${volumeLabel}`;
+}
+
+function formatSignalSummary(signal) {
+  if (!signal) return '';
+  const reasons = Array.isArray(signal.rationale) ? signal.rationale : signal.reasons || [];
+  const text = reasons.length ? reasons.join(' · ') : '信号偏中性';
+  return `  策略建议: ${signal.action}（${text}）`;
+}
 // 股票数据源配置
 const DATA_SOURCES = {
   // 新浪财经API（A股）
@@ -665,6 +702,11 @@ async function updatePrices(stocks, alertThreshold) {
     const stock = stocks[index];
     console.log(formatStockInfo(stock, data));
     persistPriceRecord(stock, data);
+    const timeseries = getTimeseriesSummary(stock.code);
+    console.log(formatTimeseriesSummary(timeseries, TIMESERIES_DEFAULTS.intervalMinutes));
+    const latestBucket = timeseries.length ? timeseries[timeseries.length - 1] : null;
+    const signal = calcTradingSignal(data.indicators, latestBucket);
+    console.log(formatSignalSummary(signal));
     if (shouldNotifyStock(stock, data, alertThreshold)) {
       notifyStock(stock, data, alertThreshold);
     }

@@ -86,6 +86,41 @@
       display:block;
       color:#e2e8f0;
     }
+  .signal-panel {
+    margin-top:20px;
+  }
+  .signal-card {
+    margin-top:8px;
+    padding:12px;
+    border-radius:10px;
+    border:1px solid #334155;
+    background:#0b1121;
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+  }
+  .signal-card small {
+    color:#94a3b8;
+  }
+  .signal-value {
+    font-size:18px;
+    font-weight:600;
+    padding:4px 8px;
+    border-radius:6px;
+    display:inline-block;
+  }
+  .signal-value.signal-buy {
+    border:1px solid #22c55e;
+    color:#22c55e;
+  }
+  .signal-value.signal-sell {
+    border:1px solid #ef4444;
+    color:#ef4444;
+  }
+  .signal-value.signal-neutral {
+    border:1px solid #94a3b8;
+    color:#94a3b8;
+  }
   </style>
 </head>
 <body>
@@ -140,6 +175,13 @@
       </tbody>
     </table>
   </section>
+  <section class="signal-panel">
+    <h2>策略建议</h2>
+    <div class="signal-card">
+      <div id="signalAction" class="signal-value signal-neutral">观望</div>
+      <small id="signalReasons">信号偏中性</small>
+    </div>
+  </section>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
@@ -152,6 +194,8 @@
     const codeLabel = document.getElementById('codeLabel');
     const timeLabel = document.getElementById('timeLabel');
     const indicatorTable = document.getElementById('indicatorTable');
+    const signalAction = document.getElementById('signalAction');
+    const signalReasons = document.getElementById('signalReasons');
     const timeseriesSummary = document.getElementById('timeseriesSummary');
     const timeseriesInterval = document.getElementById('timeseriesInterval');
 
@@ -304,8 +348,25 @@
       }
 
       if (latestPayload && latestPayload.timestamp) {
-        timeLabel.textContent = new Date(latestPayload.timestamp).toLocaleString();
-        indicatorTable.innerHTML = formatIndicators(latestPayload.indicators);
+      timeLabel.textContent = new Date(latestPayload.timestamp).toLocaleString();
+      indicatorTable.innerHTML = formatIndicators(latestPayload.indicators);
+
+      const currentSignal = latestPayload.signal;
+      if (currentSignal) {
+        const action = currentSignal.action || '观望';
+        signalAction.textContent = action;
+        signalAction.className = `signal-value ${
+          action.includes('买') ? 'signal-buy'
+            : action.includes('卖') ? 'signal-sell'
+              : 'signal-neutral'
+        }`;
+        const reasons = currentSignal.rationale ?? currentSignal.reasons ?? [];
+        signalReasons.textContent = reasons.length ? reasons.join(' · ') : '信号偏中性';
+      } else {
+        signalAction.textContent = '观望';
+        signalAction.className = 'signal-value signal-neutral';
+        signalReasons.textContent = '信号偏中性';
+      }
       } else {
         timeLabel.textContent = '-';
         indicatorTable.innerHTML = '<tr><td colspan="2">暂无最新数据</td></tr>';

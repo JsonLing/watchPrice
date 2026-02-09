@@ -54,7 +54,7 @@ npm install
 
 ## 技术指标（美股）
 
-服务会在获取美股定价后顺带从 Yahoo Finance 拉取日 K 数据，依赖 `technicalindicators` 计算 MACD、RSI、KDJ、DK，终端会直接输出这些指标的当前值及信号（超买/超卖、多头/空头）。KDJ 的信号现在同时参考 K 与 J 的交叉阈值，以避免单一线抖动导致的误报；只要 `config.json` 中是 `sh`, `sz` 或 `hk` 开头的代码，就可以同步看到 MACD、RSI、KDJ 和 DK，无需额外登录。
+服务会在获取美股定价后顺带从 Yahoo Finance 拉取日 K 数据，依赖 `technicalindicators` 计算 MACD、RSI、KDJ、DK，终端会直接输出这些指标的当前值及信号（超买/超卖、多头/空头）。KDJ 的信号现在同时参考 K 与 J 的交叉阈值，以避免单一线抖动导致的误报；终端与仪表板会附带最新分时摘要（振幅/涨幅/成交）并通过简单规则给出“买入/卖出/观望”的策略建议，让你在控制台或网页里都能快速判断当下微观趋势；只要 `config.json` 中是 `sh`, `sz` 或 `hk` 开头的代码，就可以同步看到 MACD、RSI、KDJ 和 DK，无需额外登录。
 新版已经将 A 股/港股也纳入技术指标计算，先调用雪球/东方财富历史 K 线接口（`push2his.eastmoney.com`）再算指标，而且每只股票的日K只在本地 cache 四小时，避免频繁请求；只要 `config.json` 中是 `sh`, `sz` 或 `hk` 开头的代码，就可以同步看到 MACD、RSI、KDJ 和 DK，无需额外登录。
 
 ## 桌面提醒（macOS）
@@ -196,6 +196,8 @@ npm run dashboard
 服务也会监控 `config.json`，发生变化后会自动重新加载配置并立即开始监控新加入的股票，无需重启。
 
 生成的报告会保存为 `report-<code>.html`，可直接在浏览器打开查看。
+
+仪表板下方新增“策略建议”卡片，会基于 RSI、KDJ、MACD 与分时涨幅/均价综合打分并输出“买入/卖出/观望”，API 返回结构也会在 `/api/latest` 里把这份建议同时带给前端或其他 consumer，让你在网页与 CLI 之间获得一致的提示。
 
 仪表板新增分时统计区域，会在价格图上叠加分时均价，下面显示成交量柱状图，并附带“最新振幅 / 涨幅 / 成交”摘要。前端通过 `GET /api/timeseries?code=<code>&limit=<n>&interval=<minutes>` 获取聚合后的分时窗口（默认 1 分钟），服务器会返回对应的振幅/涨幅/量值供图表和摘要使用。
 

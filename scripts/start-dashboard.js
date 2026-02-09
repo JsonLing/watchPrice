@@ -3,7 +3,8 @@ import Database from 'better-sqlite3';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { aggregateTimeseries } from '../lib/timeseries.js';
+import { calcTradingSignal } from '../lib/trading-signal.js';
+import { fetchTimeseriesSeries, TIMESERIES_DEFAULTS } from '../lib/timeseries.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,6 +36,13 @@ function parseIndicators(raw) {
   }
 }
 
+function buildTimeseries(code, params = {}) {
+  return fetchTimeseriesSeries(db, code, {
+    intervalMinutes: Math.max(1, Number(params.interval) || params.intervalMinutes || TIMESERIES_DEFAULTS.intervalMinutes),
+    limit: Math.max(1, Number(params.limit) || params.limit || TIMESERIES_DEFAULTS.windowLimit)
+  });
+}
+
 app.get('/api/history', (req, res) => {
   const code = req.query.code || 'sh601288';
   const limit = Number(req.query.limit) || 120;
@@ -63,25 +71,24 @@ app.get('/api/latest', (req, res) => {
   if (!row) {
     return res.status(404).json({ error: 'not found' });
   }
+  const indicators = parseIndicators(row.indicators);
+  const timeseries = buildTimeseries(code);
+  const latestBucket = timeseries.length ? timeseries[timeseries.length - 1] : null;
+  const signal = calcTradingSignal(indicators, latestBucket);
   res.json({
     code,
     timestamp: row.timestamp,
     price: row.price,
-    indicators: parseIndicators(row.indicators)
+    indicators,
+    signal
   });
 });
 
 app.get('/api/timeseries', (req, res) => {
   const code = (req.query.code || 'sh601288').trim();
-  const limit = Math.max(10, Number(req.query.limit) || 240);
-  const interval = Math.max(1, Number(req.query.interval) || 1);
-  const fetchLimit = Math.max(limit * 6, 200);
-  const rows = db
-    .prepare(
-      `SELECT timestamp, price, high, low, volume FROM price_records WHERE code = ? ORDER BY timestamp DESC LIMIT ?`
-    )
-    .all(code, fetchLimit);
-  const data = aggregateTimeseries(rows, { intervalMinutes: interval, limit });
+  const interval = Math.max(1, Number(req.query.interval) || TIMESERIES_DEFAULTS.intervalMinutes);
+  const limit = Math.max(1, Number(req.query.limit) || TIMESERIES_DEFAULTS.windowLimit);
+  const data = buildTimeseries(code, { interval, limit });
   res.json({
     code,
     intervalMinutes: interval,
