@@ -65,7 +65,7 @@ app.get('/api/latest', (req, res) => {
   const code = req.query.code || 'sh601288';
   const row = db
     .prepare(
-      `SELECT timestamp, price, indicators FROM price_records WHERE code = ? ORDER BY timestamp DESC LIMIT 1`
+      `SELECT timestamp, price, indicators, inner_volume, outer_volume FROM price_records WHERE code = ? ORDER BY timestamp DESC LIMIT 1`
     )
     .get(code);
   if (!row) {
@@ -74,14 +74,23 @@ app.get('/api/latest', (req, res) => {
   const indicators = parseIndicators(row.indicators);
   const timeseries = buildTimeseries(code);
   const latestBucket = timeseries.length ? timeseries[timeseries.length - 1] : null;
-  const signal = calcTradingSignal(indicators, latestBucket);
-  res.json({
+  const quote = {
+    innerVolume: row.inner_volume,
+    outerVolume: row.outer_volume,
+    currentPrice: row.price
+  };
+  const signal = calcTradingSignal(indicators, latestBucket, timeseries, quote);
+  const payload = {
     code,
     timestamp: row.timestamp,
     price: row.price,
     indicators,
     signal
-  });
+  };
+  if (Object.keys(quote).length) {
+    payload.quote = quote;
+  }
+  res.json(payload);
 });
 
 app.get('/api/timeseries', (req, res) => {

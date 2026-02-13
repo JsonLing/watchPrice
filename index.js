@@ -6,7 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
 import iconv from 'iconv-lite';
-import { MACD, RSI, Stochastic } from 'technicalindicators';
+import { ATR, MACD, RSI, SMA, Stochastic } from 'technicalindicators';
 import { calcTradingSignal } from './lib/trading-signal.js';
 import { fetchTimeseriesSeries, TIMESERIES_DEFAULTS } from './lib/timeseries.js';
 
@@ -39,14 +39,48 @@ db.exec(`
     high REAL,
     low REAL,
     volume REAL,
+    inner_volume REAL,
+    outer_volume REAL,
     indicators TEXT
   )
+`);
+try {
+  db.exec('ALTER TABLE price_records ADD COLUMN inner_volume REAL');
+} catch (_) { /* 已存在则忽略 */ }
+try {
+  db.exec('ALTER TABLE price_records ADD COLUMN outer_volume REAL');
+} catch (_) { /* 已存在则忽略 */ }
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS strategy_pushes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trading_date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT,
+    action TEXT NOT NULL,
+    close_price REAL NOT NULL,
+    stop_loss REAL,
+    take_profit REAL,
+    rationale TEXT,
+    next_close_price REAL,
+    success INTEGER,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+  )
+`);
+const insertStrategyPush = db.prepare(`
+  INSERT INTO strategy_pushes (trading_date, code, name, action, close_price, stop_loss, take_profit, rationale)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const updateStrategyResult = db.prepare(`
+  UPDATE strategy_pushes SET next_close_price = ?, success = ?, updated_at = datetime('now')
+  WHERE trading_date = ? AND code = ?
 `);
 const insertRecord = db.prepare(`
   INSERT INTO price_records (
     timestamp, code, name, source,
-    price, change, change_percent, high, low, volume, indicators
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    price, change, change_percent, high, low, volume, inner_volume, outer_volume, indicators
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 function getTimeseriesSummary(code, options = {}) {
@@ -82,7 +116,20 @@ function formatSignalSummary(signal) {
   if (!signal) return '';
   const reasons = Array.isArray(signal.rationale) ? signal.rationale : signal.reasons || [];
   const text = reasons.length ? reasons.join(' · ') : '信号偏中性';
-  return `  策略建议: ${signal.action}（${text}）`;
+  let out = `  策略建议: ${signal.action}（${text}）`;
+  if (signal.stopLoss != null && Number.isFinite(signal.stopLoss)) {
+    const pct = signal.stopLossPct != null && Number.isFinite(signal.stopLossPct)
+      ? ` (${signal.stopLossPct >= 0 ? '+' : ''}${signal.stopLossPct.toFixed(2)}%)`
+      : '';
+    out += `\n  止损位: ${signal.stopLoss.toFixed(2)}${pct}`;
+  }
+  if (signal.takeProfit != null && Number.isFinite(signal.takeProfit)) {
+    const pct = signal.takeProfitPct != null && Number.isFinite(signal.takeProfitPct)
+      ? ` (${signal.takeProfitPct >= 0 ? '+' : ''}${signal.takeProfitPct.toFixed(2)}%)`
+      : '';
+    out += `\n  止盈位: ${signal.takeProfit.toFixed(2)}${pct}`;
+  }
+  return out;
 }
 // 股票数据源配置
 const DATA_SOURCES = {
@@ -181,8 +228,11 @@ async function fetchFromTencent(code) {
     const yesterdayClose = parseFloat(fields[4]) || 0;
     const change = currentPrice - yesterdayClose;
     const changePercent = yesterdayClose > 0 ? (change / yesterdayClose * 100).toFixed(2) : '0.00';
-    
-    return {
+    const volume = parseInt(fields[6], 10) || 0;
+    const outerVolume = parseInt(fields[7], 10) || 0; // 外盘：主动买入
+    const innerVolume = parseInt(fields[8], 10) || 0; // 内盘：主动卖出
+
+    const result = {
       name: fields[1],
       code: fields[2],
       currentPrice,
@@ -190,11 +240,16 @@ async function fetchFromTencent(code) {
       todayOpen: parseFloat(fields[5]) || 0,
       high: parseFloat(fields[33]) || 0,
       low: parseFloat(fields[34]) || 0,
-      volume: parseInt(fields[6]) || 0,
+      volume,
       change,
       changePercent,
       time: fields[30] || new Date().toLocaleString('zh-CN')
     };
+    if (Number.isFinite(outerVolume) && Number.isFinite(innerVolume)) {
+      result.outerVolume = outerVolume;
+      result.innerVolume = innerVolume;
+    }
+    return result;
   } catch (error) {
     console.error(`获取 ${code} 数据失败 (Tencent):`, error.message);
     return null;
@@ -276,14 +331,12 @@ async function fetchEastmoneyHistory(code, count = HISTORY_KLINE_LIMIT) {
     const secid = secidForCode(code);
     if (!secid) return null;
     const url = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1&fields2=f51,f52,f53,f54,f55,f56&klt=101&fqt=1&beg=0&end=20500000&lmt=${count}`;
-    const response = await axios.get(url);
+    const response = await axios.get(url, { timeout: 10000 });
     const data = response.data?.data;
     if (!data || !Array.isArray(data.klines)) return null;
     const klines = data.klines.map(line => {
-      const [date, open, close, high, low, volume] = line.split(',').map((v, idx) => {
-        if (idx === 0) return v;
-        return v;
-      });
+      const parts = line.split(',');
+      const [date, open, close, high, low, volume] = [parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]];
       return {
         time: new Date(date.replace(/-/g, '/')),
         open: parseFloat(open),
@@ -295,9 +348,51 @@ async function fetchEastmoneyHistory(code, count = HISTORY_KLINE_LIMIT) {
     }).filter(k => k && !Number.isNaN(k.close));
     return klines.length ? klines : null;
   } catch (error) {
-    console.error(`获取 ${code} 日K 数据失败:`, error.message);
     return null;
   }
+}
+
+/**
+ * 新浪财经日K（备用）
+ * scale=240 表示日K（240分钟/日），datalen 最多约 1023
+ */
+async function fetchSinaHistory(code, count = HISTORY_KLINE_LIMIT) {
+  try {
+    const symbol = code.toLowerCase();
+    const url = `https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${encodeURIComponent(symbol)}&scale=240&ma=5&datalen=${Math.min(count, 1023)}`;
+    const response = await axios.get(url, { timeout: 10000 });
+    const raw = response.data;
+    if (!Array.isArray(raw) || raw.length === 0) return null;
+    const klines = raw
+      .map((item) => {
+        const day = item.day || item.date;
+        const open = parseFloat(item.open);
+        const high = parseFloat(item.high);
+        const low = parseFloat(item.low);
+        const close = parseFloat(item.close);
+        const volume = parseInt(item.volume, 10) || 0;
+        if (!day || !Number.isFinite(close)) return null;
+        return {
+          time: new Date(day.replace(/-/g, '/')),
+          open: Number.isFinite(open) ? open : close,
+          high: Number.isFinite(high) ? high : close,
+          low: Number.isFinite(low) ? low : close,
+          close,
+          volume
+        };
+      })
+      .filter(Boolean);
+    return klines.length >= 30 ? klines : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+/** A 股代码转 Yahoo 标的符号（用于备用） */
+function codeToYahooSymbol(code) {
+  if (code.startsWith('sh')) return `${code.slice(2)}.SS`;
+  if (code.startsWith('sz')) return `${code.slice(2)}.SZ`;
+  return code;
 }
 
 async function fetchStockHistory(code) {
@@ -305,14 +400,34 @@ async function fetchStockHistory(code) {
   if (cached) return cached;
 
   let klines = null;
+  let source = null;
+
   if (isDomesticMarket(code)) {
     klines = await fetchEastmoneyHistory(code);
-  }
-  if (!klines) {
+    if (klines) source = 'eastmoney';
+    if (!klines) {
+      klines = await fetchSinaHistory(code);
+      if (klines) {
+        source = 'sina';
+        console.warn(`日K ${code} 已切换备用源: 新浪`);
+      }
+    }
+    if (!klines) {
+      const yahooCode = codeToYahooSymbol(code);
+      klines = await fetchYahooHistory(yahooCode, '3mo');
+      if (klines) {
+        source = 'yahoo';
+        console.warn(`日K ${code} 已切换备用源: Yahoo`);
+      }
+    }
+  } else {
     klines = await fetchYahooHistory(code, '3mo');
+    if (klines) source = 'yahoo';
   }
 
-  setCachedHistory(code, klines);
+  if (klines && source) {
+    setCachedHistory(code, klines);
+  }
   return klines;
 }
 
@@ -453,6 +568,42 @@ function calculateIndicators(klines) {
   } catch (error) {
     console.error('DK计算错误:', error.message);
   }
+
+  // ATR（波动率，用于止损/止盈）
+  try {
+    const atrResult = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
+    if (atrResult && atrResult.length > 0) {
+      const atrValue = atrResult[atrResult.length - 1];
+      if (Number.isFinite(atrValue)) indicators.atr = atrValue;
+    }
+  } catch (error) {
+    console.error('ATR计算错误:', error.message);
+  }
+
+  // 近期结构：N 日高低点、MA20（支撑/阻力与止损止盈参考）
+  try {
+    const n10 = Math.min(10, lows.length);
+    const n20 = Math.min(20, lows.length);
+    if (n20 >= 5) {
+      const sliceLow10 = lows.slice(-n10);
+      const sliceLow20 = lows.slice(-n20);
+      const sliceHigh10 = highs.slice(-n10);
+      const sliceHigh20 = highs.slice(-n20);
+      indicators.recentLow10 = Math.min(...sliceLow10);
+      indicators.recentLow20 = Math.min(...sliceLow20);
+      indicators.recentHigh10 = Math.max(...sliceHigh10);
+      indicators.recentHigh20 = Math.max(...sliceHigh20);
+    }
+    if (closes.length >= 20) {
+      const ma20Result = SMA.calculate({ period: 20, values: closes });
+      if (ma20Result && ma20Result.length > 0) {
+        const ma20 = ma20Result[ma20Result.length - 1];
+        if (Number.isFinite(ma20)) indicators.ma20 = ma20;
+      }
+    }
+  } catch (error) {
+    console.error('近期结构/MA20计算错误:', error.message);
+  }
   
   return Object.keys(indicators).length > 0 ? indicators : null;
 }
@@ -526,6 +677,12 @@ ${changeSymbol} ${data.name} (${stock.code})
   成交量: ${(data.volume / 10000).toFixed(2)}万
   更新时间: ${data.time}`;
 
+  if (Number.isFinite(data.outerVolume) && Number.isFinite(data.innerVolume)) {
+    const total = data.outerVolume + data.innerVolume;
+    const ratio = total > 0 ? ((data.outerVolume / total) * 100).toFixed(1) : '0';
+    output += `\n  内外盘: 外 ${(data.outerVolume / 10000).toFixed(2)}万 / 内 ${(data.innerVolume / 10000).toFixed(2)}万 (外盘占比 ${ratio}%)`;
+  }
+
   if (data.indicators) {
     output += '\n  ───────────────────────────────';
     if (data.indicators.macd) {
@@ -539,6 +696,15 @@ ${changeSymbol} ${data.name} (${stock.code})
     }
     if (data.indicators.dk) {
       output += `\n  🔄 DK: ${data.indicators.dk.value}% | ${data.indicators.dk.signal}`;
+    }
+    if (data.indicators.atr != null && Number.isFinite(data.indicators.atr)) {
+      output += `\n  📐 ATR(14): ${data.indicators.atr.toFixed(3)}`;
+    }
+    if (data.indicators.ma20 != null && Number.isFinite(data.indicators.ma20)) {
+      output += ` | MA20: ${data.indicators.ma20.toFixed(2)}`;
+    }
+    if (data.indicators.recentLow20 != null && data.indicators.recentHigh20 != null) {
+      output += `\n  近20日: 低 ${data.indicators.recentLow20.toFixed(2)} / 高 ${data.indicators.recentHigh20.toFixed(2)}`;
     }
   }
 
@@ -606,6 +772,8 @@ function persistPriceRecord(stock, data) {
   if (!data) return;
   const indicatorsJson = data.indicators ? JSON.stringify(data.indicators) : null;
   const changePercent = parseFloat(data.changePercent);
+  const innerVolume = data.innerVolume != null && Number.isFinite(Number(data.innerVolume)) ? Number(data.innerVolume) : null;
+  const outerVolume = data.outerVolume != null && Number.isFinite(Number(data.outerVolume)) ? Number(data.outerVolume) : null;
   insertRecord.run(
     formatTimestamp(data.time),
     stock.code,
@@ -617,6 +785,8 @@ function persistPriceRecord(stock, data) {
     data.high,
     data.low,
     data.volume,
+    innerVolume,
+    outerVolume,
     indicatorsJson
   );
 }
@@ -702,10 +872,16 @@ async function updatePrices(stocks, alertThreshold) {
     const stock = stocks[index];
     console.log(formatStockInfo(stock, data));
     persistPriceRecord(stock, data);
+    if (!data) return;
     const timeseries = getTimeseriesSummary(stock.code);
     console.log(formatTimeseriesSummary(timeseries, TIMESERIES_DEFAULTS.intervalMinutes));
     const latestBucket = timeseries.length ? timeseries[timeseries.length - 1] : null;
-    const signal = calcTradingSignal(data.indicators, latestBucket);
+    const quote = {
+      outerVolume: data.outerVolume,
+      innerVolume: data.innerVolume,
+      currentPrice: data.currentPrice
+    };
+    const signal = calcTradingSignal(data.indicators, latestBucket, timeseries, quote);
     console.log(formatSignalSummary(signal));
     if (shouldNotifyStock(stock, data, alertThreshold)) {
       notifyStock(stock, data, alertThreshold);
@@ -762,6 +938,90 @@ function millisUntilNextWindow(config, now = new Date()) {
 }
 
 let tickTimer;
+let lastEodDate = null;
+
+function toDateStr(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function previousTradingDate(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() - 1);
+  return toDateStr(d);
+}
+
+/**
+ * 每个交易日结束后：按 config 股票生成买卖策略推送，并以前一日的次日收盘更新成功率
+ */
+async function runEodRoutine(stocks) {
+  if (!stocks || stocks.length === 0) return;
+  const now = new Date();
+  const todayStr = toDateStr(now);
+  const yesterdayStr = previousTradingDate(todayStr);
+
+  const promises = stocks.map(stock => fetchStockPrice(stock));
+  const results = await Promise.all(promises);
+  const todayCloses = {};
+
+  for (let i = 0; i < results.length; i++) {
+    const data = results[i];
+    const stock = stocks[i];
+    if (!data) continue;
+    const closePrice = data.currentPrice;
+    todayCloses[stock.code] = closePrice;
+    const timeseries = getTimeseriesSummary(stock.code);
+    const latestBucket = timeseries.length ? timeseries[timeseries.length - 1] : null;
+    const quote = {
+      outerVolume: data.outerVolume,
+      innerVolume: data.innerVolume,
+      currentPrice: data.currentPrice
+    };
+    const signal = calcTradingSignal(data.indicators, latestBucket, timeseries, quote);
+    const rationale = Array.isArray(signal.rationale) ? signal.rationale.join('; ') : (signal.rationale || '');
+    insertStrategyPush.run(
+      todayStr,
+      stock.code,
+      stock.name || stock.code,
+      signal.action,
+      closePrice,
+      signal.stopLoss ?? null,
+      signal.takeProfit ?? null,
+      rationale
+    );
+  }
+
+  const yesterdayRows = db.prepare(
+    'SELECT code, action, close_price FROM strategy_pushes WHERE trading_date = ? AND next_close_price IS NULL'
+  ).all(yesterdayStr);
+
+  for (const row of yesterdayRows) {
+    const nextClose = todayCloses[row.code];
+    if (nextClose == null || !Number.isFinite(nextClose)) continue;
+    const isBuy = row.action === '买入' || row.action === '略偏买入';
+    const isSell = row.action === '卖出' || row.action === '略偏卖出';
+    const success = isBuy ? nextClose > row.close_price : isSell ? nextClose < row.close_price : null;
+    if (success !== null) {
+      updateStrategyResult.run(nextClose, success ? 1 : 0, yesterdayStr, row.code);
+    }
+  }
+
+  const pushed = results.filter(Boolean).length;
+  console.log(`\n📋 策略推送已生成 (${todayStr})，共 ${pushed} 只`);
+
+  const successRows = db.prepare(
+    'SELECT COUNT(*) as n FROM strategy_pushes WHERE success IS NOT NULL'
+  ).get();
+  const winRows = db.prepare(
+    'SELECT COUNT(*) as n FROM strategy_pushes WHERE success = 1'
+  ).get();
+  const total = successRows?.n ?? 0;
+  const wins = winRows?.n ?? 0;
+  const rate = total > 0 ? ((wins / total) * 100).toFixed(1) : '0';
+  console.log(`   历史统计: 已验证 ${total} 条，成功 ${wins} 条，成功率 ${rate}%\n`);
+
+  const notificationScript = `display notification "今日 ${pushed} 只策略已生成；历史成功率 ${rate}%（${wins}/${total}）" with title "WatchPrice 策略推送" sound name "Glass"`;
+  exec(`osascript -e ${JSON.stringify(notificationScript)}`, () => {});
+}
 
 function scheduleNextTick(delay, config, stocks, alertThreshold) {
   if (tickTimer) {
@@ -774,6 +1034,9 @@ function scheduleNextTick(delay, config, stocks, alertThreshold) {
 
 async function tick(config, stocks, alertThreshold) {
   const now = new Date();
+  const totalMinutes = now.getHours() * 60 + now.getMinutes();
+  const todayStr = toDateStr(now);
+
   if (!isTradingOpen(config, now)) {
     const wait = millisUntilNextWindow(config, now);
     console.log(`🌙 休市中，${Math.round(wait / 1000 / 60)} 分钟后尝试恢复`);
@@ -787,11 +1050,27 @@ async function tick(config, stocks, alertThreshold) {
     console.error('行情更新出错:', error);
   }
 
+  // 策略推送：收盘前 20 分钟触发一次（下午 14:40–15:00 区间内首次 tick 执行）
+  const afternoonEnd = 15 * 60;
+  const pushWindowStart = afternoonEnd - 20;
+  if (totalMinutes >= pushWindowStart && totalMinutes < afternoonEnd && lastEodDate !== todayStr) {
+    lastEodDate = todayStr;
+    try {
+      await runEodRoutine(stocks);
+    } catch (e) {
+      console.error('策略推送失败:', e);
+    }
+  }
+
   scheduleNextTick(config.updateInterval || UPDATE_INTERVAL, config, stocks, alertThreshold);
 }
 
-// 启动服务
-main().catch(error => {
-  console.error('服务启动失败:', error);
-  process.exit(1);
-});
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
+if (isMain) {
+  main().catch(error => {
+    console.error('服务启动失败:', error);
+    process.exit(1);
+  });
+}
+
+export { calculateIndicators, fetchStockHistory };

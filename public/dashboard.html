@@ -121,6 +121,17 @@
     border:1px solid #94a3b8;
     color:#94a3b8;
   }
+  .signal-stop-take {
+    margin-top:8px;
+    font-size:13px;
+    color:#94a3b8;
+    display:flex;
+    flex-wrap:wrap;
+    gap:12px;
+  }
+  .signal-stop-take span {
+    color:#e2e8f0;
+  }
   </style>
 </head>
 <body>
@@ -180,6 +191,7 @@
     <div class="signal-card">
       <div id="signalAction" class="signal-value signal-neutral">观望</div>
       <small id="signalReasons">信号偏中性</small>
+      <div id="signalStopTake" class="signal-stop-take"></div>
     </div>
   </section>
 
@@ -280,7 +292,7 @@
       }
     });
 
-    function formatIndicators(data) {
+    function formatIndicators(data, quote) {
       if (!data) return '<tr><td colspan="2">尚未获取</td></tr>';
       const entries = [
         ['RSI', data.rsi?.value ?? data.rsi ?? 'N/A'],
@@ -295,7 +307,17 @@
         ['DK', data.dk?.value ?? 'N/A'],
         ['DK 信号', data.dk?.signal ?? 'N/A']
       ];
-      return entries.map(entry => `<tr><td>${entry[0]}</td><td>${entry[1]}</td></tr>`).join('');
+      let html = entries.map(entry => `<tr><td>${entry[0]}</td><td>${entry[1]}</td></tr>`).join('');
+      if (quote && (quote.innerVolume != null || quote.outerVolume != null)) {
+        const o = Number(quote.outerVolume) || 0;
+        const i = Number(quote.innerVolume) || 0;
+        const total = o + i;
+        const ratio = total > 0 ? ((o / total) * 100).toFixed(1) : '0';
+        const oStr = o >= 10000 ? (o / 10000).toFixed(2) + '万' : o;
+        const iStr = i >= 10000 ? (i / 10000).toFixed(2) + '万' : i;
+        html += `<tr><td>内外盘</td><td>外 ${oStr} / 内 ${iStr}（外盘占比 ${ratio}%）</td></tr>`;
+      }
+      return html;
     }
 
     function formatVolume(value) {
@@ -349,7 +371,7 @@
 
       if (latestPayload && latestPayload.timestamp) {
       timeLabel.textContent = new Date(latestPayload.timestamp).toLocaleString();
-      indicatorTable.innerHTML = formatIndicators(latestPayload.indicators);
+      indicatorTable.innerHTML = formatIndicators(latestPayload.indicators, latestPayload.quote);
 
       const currentSignal = latestPayload.signal;
       if (currentSignal) {
@@ -362,10 +384,27 @@
         }`;
         const reasons = currentSignal.rationale ?? currentSignal.reasons ?? [];
         signalReasons.textContent = reasons.length ? reasons.join(' · ') : '信号偏中性';
+        const stopTakeEl = document.getElementById('signalStopTake');
+        if (stopTakeEl) {
+          const parts = [];
+          if (currentSignal.stopLoss != null && Number.isFinite(currentSignal.stopLoss)) {
+            const pct = currentSignal.stopLossPct != null && Number.isFinite(currentSignal.stopLossPct)
+              ? ` (${currentSignal.stopLossPct >= 0 ? '+' : ''}${currentSignal.stopLossPct.toFixed(2)}%)` : '';
+            parts.push(`止损位: <span>${Number(currentSignal.stopLoss).toFixed(2)}${pct}</span>`);
+          }
+          if (currentSignal.takeProfit != null && Number.isFinite(currentSignal.takeProfit)) {
+            const pct = currentSignal.takeProfitPct != null && Number.isFinite(currentSignal.takeProfitPct)
+              ? ` (${currentSignal.takeProfitPct >= 0 ? '+' : ''}${currentSignal.takeProfitPct.toFixed(2)}%)` : '';
+            parts.push(`止盈位: <span>${Number(currentSignal.takeProfit).toFixed(2)}${pct}</span>`);
+          }
+          stopTakeEl.innerHTML = parts.length ? parts.join(' · ') : '';
+        }
       } else {
         signalAction.textContent = '观望';
         signalAction.className = 'signal-value signal-neutral';
         signalReasons.textContent = '信号偏中性';
+        const stopTakeEl = document.getElementById('signalStopTake');
+        if (stopTakeEl) stopTakeEl.innerHTML = '';
       }
       } else {
         timeLabel.textContent = '-';

@@ -16,7 +16,11 @@
     "show:support": "node scripts/show-support.js",
     "signal": "node scripts/calc-signal.js",
     "report": "node scripts/generate-report.js",
-    "dashboard": "node scripts/start-dashboard.js"
+    "dashboard": "node scripts/start-dashboard.js",
+    "backtest": "node scripts/backtest-strategy.js",
+    "strategy:stats": "node scripts/show-strategy-stats.js",
+    "strategy:backfill": "node scripts/backfill-strategy-history.js",
+    "strategy:today": "node scripts/today-strategy.js"
   },
   "keywords": [
     "stock",
