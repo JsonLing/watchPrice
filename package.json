@@ -20,7 +20,9 @@
     "backtest": "node scripts/backtest-strategy.js",
     "strategy:stats": "node scripts/show-strategy-stats.js",
     "strategy:backfill": "node scripts/backfill-strategy-history.js",
-    "strategy:today": "node scripts/today-strategy.js"
+    "strategy:today": "node scripts/today-strategy.js",
+    "news": "node scripts/news-service.js",
+    "news:once": "node scripts/news-service.js --once"
   },
   "keywords": [
     "stock",
@@ -36,6 +38,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "iconv-lite": "^0.7.2",
+    "rss-parser": "^3.13.0",
     "technicalindicators": "^3.1.0"
   }
 }

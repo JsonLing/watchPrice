@@ -9,6 +9,11 @@
       "name": "宗申动力",
       "code": "sz001696",
       "source": "auto"
+    },
+    {
+      "name": "航天发展",
+      "code": "sz000547",
+      "source": "auto"
     }
   ],
   "updateInterval": 5000,
