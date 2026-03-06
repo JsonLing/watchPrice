@@ -32,6 +32,9 @@
   ],
   "author": "",
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "axios": "^1.6.0",
     "better-sqlite3": "^8.7.0",

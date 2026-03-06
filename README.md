@@ -18,6 +18,13 @@
 npm install
 ```
 
+### Node 版本要求
+
+- **需要 Node.js 18 或以上**（终端执行 `node -v` 检查）。
+- 原因：项目使用 ESM（`"type": "module"`），且 `npm run dev` 依赖 `--watch`（Node 18.11+ 支持）。
+- 根目录的单文件导出脚本 `export-watchprice-standalone.mjs` 同样建议在 Node 18+ 下运行。
+- 若使用 Node 16，`npm start`、仪表板与脚本一般可跑，但 `npm run dev` 可能因无 `--watch` 而报错，建议升级到 Node 18+。
+
 ## 配置
 
 编辑 `config.json` 文件来配置你要监控的股票：
@@ -224,6 +231,51 @@ npm run dashboard
 
 ============================================================
 ```
+
+## 在别的电脑运行（迁移 / 新机部署）
+
+在另一台电脑上跑本项目时，按下面步骤操作即可。
+
+### 环境要求
+
+- **Node.js 18+**（与 `package.json` 中 `engines.node` 一致；`node -v` 检查）。
+- 无需全局安装其它依赖，在新机项目目录下执行 `npm install` 即可。
+
+### 步骤概览
+
+| 步骤 | 说明 |
+|------|------|
+| 1. 获取代码 | `git clone` 或直接拷贝整个项目目录。 |
+| 2. 安装依赖 | 在项目根目录执行 `npm install`。 |
+| 3. 配置股票 | 编辑 `config.json`，填写要监控的股票（见上方「配置」）。 |
+| 4. 可选：环境变量 | 若用新闻/FinNHub 等，复制 `.env.example` 为 `.env` 并填好。 |
+| 5. 启动 | `npm start` 或 `npm run dev`。 |
+
+### 需要带上的文件/目录
+
+- **必带**：整个项目目录（含 `package.json`、`config.json`、`index.js`、`lib/`、`scripts/`、`public/` 等）。在新电脑上需要重新执行一次 `npm install`。
+- **可选**：若想保留历史行情，把本机的 `watchprice.db` 拷贝到新机项目根目录；不拷贝则在新机从零开始写入新库。
+- **不要带**：`node_modules/` 不必拷贝，到新机再 `npm install`；`.env` 若含密钥请单独备份并在新机按需创建。
+
+### 仅做数据导出、不想装依赖时
+
+若新电脑上**只打算导出已有 `watchprice.db` 的数据**，可以不装项目依赖，使用根目录的**单文件导出脚本**（零安装）：
+
+```bash
+# 只需这两个文件：export-watchprice-standalone.mjs、watchprice.db
+node export-watchprice-standalone.mjs history --code=sh601288 --limit=10 --format=table
+node export-watchprice-standalone.mjs all --format=csv
+node export-watchprice-standalone.mjs timeseries --code=AAPL --interval=5 --format=json
+```
+
+- 仅依赖 Node 内置模块，**无需** `npm install`。
+- 首次运行会从网络下载 sql.js 并缓存在当前目录下的 `.watchprice-export/`，之后可离线使用。若需完全离线，在能联网的电脑先运行一次，再把该目录与脚本、数据库一起拷贝到新机即可。
+
+### 常见问题
+
+- **新机没有历史数据**：正常。不拷贝 `watchprice.db` 时，服务会新建空库并逐渐写入；若要沿用旧数据，把原机的 `watchprice.db` 拷到新机项目根目录即可。
+- **端口被占用**：仪表板默认 3000 端口，若冲突可改 `scripts/start-dashboard.js` 中的端口或关闭占用该端口的程序。
+- **网络/API 失败**：确保新机可访问外网；若在公司内网，注意是否有代理或防火墙限制。
 
 ## 注意事项
 
