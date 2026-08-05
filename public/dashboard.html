@@ -292,7 +292,12 @@
       }
     });
 
-    function formatIndicators(data, quote) {
+    function formatPercent(value) {
+      const num = Number(value);
+      return Number.isFinite(num) ? `${num.toFixed(2)}%` : 'N/A';
+    }
+
+    function formatIndicators(data, quote, history) {
       if (!data) return '<tr><td colspan="2">尚未获取</td></tr>';
       const entries = [
         ['RSI', data.rsi?.value ?? data.rsi ?? 'N/A'],
@@ -316,6 +321,16 @@
         const oStr = o >= 10000 ? (o / 10000).toFixed(2) + '万' : o;
         const iStr = i >= 10000 ? (i / 10000).toFixed(2) + '万' : i;
         html += `<tr><td>内外盘</td><td>外 ${oStr} / 内 ${iStr}（外盘占比 ${ratio}%）</td></tr>`;
+      }
+      if (history && history.available) {
+        const position = Number(history.position20);
+        html += [
+          ['日K趋势', history.trend || 'neutral'],
+          ['MA5 / MA20', `${Number(history.ma5).toFixed(2)} / ${Number(history.ma20).toFixed(2)}`],
+          ['20日位置', Number.isFinite(position) ? `${(position * 100).toFixed(0)}%` : 'N/A'],
+          ['5日涨跌', formatPercent(history.change5)],
+          ['20日涨跌', formatPercent(history.change20)]
+        ].map(entry => `<tr><td>${entry[0]}</td><td>${entry[1]}</td></tr>`).join('');
       }
       return html;
     }
@@ -371,7 +386,7 @@
 
       if (latestPayload && latestPayload.timestamp) {
       timeLabel.textContent = new Date(latestPayload.timestamp).toLocaleString();
-      indicatorTable.innerHTML = formatIndicators(latestPayload.indicators, latestPayload.quote);
+      indicatorTable.innerHTML = formatIndicators(latestPayload.indicators, latestPayload.quote, latestPayload.history);
 
       const currentSignal = latestPayload.signal;
       if (currentSignal) {

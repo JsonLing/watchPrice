@@ -5,6 +5,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { calcTradingSignal } from '../lib/trading-signal.js';
 import { fetchTimeseriesSeries, TIMESERIES_DEFAULTS } from '../lib/timeseries.js';
+import { buildHistoryContext } from '../lib/history-context.js';
+import { calculateIndicators, fetchStockHistory } from '../index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,7 +63,7 @@ app.get('/api/history', (req, res) => {
   res.json({ code, data: history });
 });
 
-app.get('/api/latest', (req, res) => {
+app.get('/api/latest', async (req, res) => {
   const code = req.query.code || 'sh601288';
   const row = db
     .prepare(
@@ -71,7 +73,17 @@ app.get('/api/latest', (req, res) => {
   if (!row) {
     return res.status(404).json({ error: 'not found' });
   }
-  const indicators = parseIndicators(row.indicators);
+  let indicators = parseIndicators(row.indicators);
+  let history = null;
+  try {
+    const klines = await fetchStockHistory(code);
+    if (klines) {
+      history = buildHistoryContext(klines);
+      indicators = calculateIndicators(klines) || indicators;
+    }
+  } catch (error) {
+    console.error(`获取 ${code} 历史策略上下文失败:`, error.message);
+  }
   const timeseries = buildTimeseries(code);
   const latestBucket = timeseries.length ? timeseries[timeseries.length - 1] : null;
   const quote = {
@@ -79,13 +91,14 @@ app.get('/api/latest', (req, res) => {
     outerVolume: row.outer_volume,
     currentPrice: row.price
   };
-  const signal = calcTradingSignal(indicators, latestBucket, timeseries, quote);
+  const signal = calcTradingSignal(indicators, latestBucket, timeseries, quote, history);
   const payload = {
     code,
     timestamp: row.timestamp,
     price: row.price,
     indicators,
-    signal
+    signal,
+    history
   };
   if (Object.keys(quote).length) {
     payload.quote = quote;

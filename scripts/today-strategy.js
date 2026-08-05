@@ -8,6 +8,8 @@ import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { fetchTimeseriesSeries, TIMESERIES_DEFAULTS } from '../lib/timeseries.js';
 import { calcTradingSignal } from '../lib/trading-signal.js';
+import { buildHistoryContext } from '../lib/history-context.js';
+import { calculateIndicators, fetchStockHistory } from '../index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const configPath = path.join(__dirname, '../config.json');
@@ -43,7 +45,17 @@ async function run() {
       continue;
     }
 
-    const indicators = parseIndicators(row.indicators);
+    let indicators = parseIndicators(row.indicators);
+    let history = null;
+    try {
+      const klines = await fetchStockHistory(code);
+      if (klines) {
+        history = buildHistoryContext(klines);
+        indicators = calculateIndicators(klines) || indicators;
+      }
+    } catch (error) {
+      console.error(`获取 ${code} 历史策略上下文失败:`, error.message);
+    }
     const timeseries = fetchTimeseriesSeries(db, code, { limit: TIMESERIES_DEFAULTS.windowLimit });
     const latestBucket = timeseries.length ? timeseries[timeseries.length - 1] : null;
     const quote = {
@@ -51,7 +63,7 @@ async function run() {
       innerVolume: row.inner_volume ?? undefined,
       outerVolume: row.outer_volume ?? undefined
     };
-    const signal = calcTradingSignal(indicators, latestBucket, timeseries, quote);
+    const signal = calcTradingSignal(indicators, latestBucket, timeseries, quote, history);
 
     const dataTime = row.timestamp ? new Date(row.timestamp).toLocaleString('zh-CN') : '';
     console.log(`\n${name} (${code})  数据时间: ${dataTime}`);

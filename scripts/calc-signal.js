@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { buildHistoryContext } from '../lib/history-context.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,7 +44,13 @@ const rsi = Number(parsedIndicators?.rsi?.value ?? parsedIndicators?.rsi);
 const macdSignal = parsedIndicators?.macd?.signalType;
 const dkSignal = parsedIndicators?.dk?.signal;
 
-const closes = rows.map(r => Number(r.close)).filter(Number.isFinite);
+const history = buildHistoryContext(rows.slice().reverse().map(row => ({
+  close: row.price,
+  high: row.price,
+  low: row.price,
+  volume: null
+})));
+const closes = rows.map(r => Number(r.price)).filter(Number.isFinite);
 const support = Math.min(...closes);
 const resistance = Math.max(...closes);
 const current = closes[0];
@@ -70,4 +77,7 @@ console.log(`  MACD 方向: ${macdSignal || '未知'}`);
 console.log(`  DK Signal: ${dkSignal || '未知'}`);
 console.log(`  当前价格: ${Number.isFinite(current) ? current.toFixed(2) : 'N/A'}`);
 console.log(`  支撑: ${support.toFixed(2)} / 压力: ${resistance.toFixed(2)}`);
+if (history.available) {
+  console.log(`  历史趋势: ${history.trend} / 20日位置: ${Number.isFinite(history.position20) ? `${(history.position20 * 100).toFixed(0)}%` : 'N/A'}`);
+}
 console.log(`  建议: ${action}`);

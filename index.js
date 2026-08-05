@@ -9,6 +9,9 @@ import iconv from 'iconv-lite';
 import { ATR, MACD, RSI, SMA, Stochastic } from 'technicalindicators';
 import { calcTradingSignal } from './lib/trading-signal.js';
 import { fetchTimeseriesSeries, TIMESERIES_DEFAULTS } from './lib/timeseries.js';
+import { buildHistoryContext } from './lib/history-context.js';
+import { sendFeishu, isFeishuEnabled } from './lib/feishu-notify.js';
+import { summarizePosition, calcStopLevels, formatPositionStatus } from './lib/position-analyzer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,6 +25,8 @@ const HISTORY_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 小时
 const historyCache = new Map();
 const DB_FILE = path.join(__dirname, 'watchprice.db');
 const notificationCache = new Map(); // 缓存最近的提醒值
+const keyLevelFired = new Map(); // 关键位已触发状态: key=`code:price` -> true（防重复通知）
+const positionLevelFired = new Map(); // 持仓止损/止盈触发状态: key=`code:sl|tp` -> true
 let currentConfig = null;
 let currentStocks = [];
 
@@ -644,6 +649,7 @@ async function fetchStockPrice(stock) {
         if (indicators) {
           data.indicators = indicators;
         }
+        data.historyContext = buildHistoryContext(klines);
       }
     } catch (error) {
       // 技术指标获取失败不影响主功能
@@ -768,6 +774,99 @@ function formatTimestamp(value) {
   return new Date().toISOString();
 }
 
+/**
+ * 关键位到价监控：检查 config.json 中 alerts 配置，触发则发 macOS + 飞书通知
+ * 每只股票每个关键位只触发一次（进程生命周期内）
+ */
+function checkKeyLevels(stock, data) {
+  if (!data || !currentConfig?.alerts) return;
+  const levels = currentConfig.alerts[stock.code];
+  if (!levels || !Array.isArray(levels) || levels.length === 0) return;
+
+  const price = Number(data.currentPrice);
+  if (!Number.isFinite(price)) return;
+
+  for (const level of levels) {
+    const levelPrice = Number(level.price);
+    if (!Number.isFinite(levelPrice)) continue;
+    const key = `${stock.code}:${levelPrice}`;
+    if (keyLevelFired.get(key)) continue;
+
+    const dir = level.dir || 'below';
+    const hit = dir === 'above' ? price >= levelPrice : price <= levelPrice;
+    if (!hit) continue;
+
+    keyLevelFired.set(key, true);
+    const arrow = dir === 'above' ? '📈 触及' : '📉 跌破';
+    const msg = `${data.name || stock.code} 现价 ${price} ${arrow} ${levelPrice} → ${level.label || '关键位'}`;
+    const timeStr = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    console.log(`🔔 [${timeStr}] ${msg}`);
+
+    // macOS 通知
+    const notificationScript = `display notification ${JSON.stringify(msg)} with title ${JSON.stringify('📈 到价提醒')} sound name "Glass"`;
+    exec(`osascript -e ${JSON.stringify(notificationScript)}`, error => {
+      if (error) console.error('到价桌面通知失败：', error.message);
+    });
+
+    // 飞书通知（异步，失败不影响主流程）
+    if (isFeishuEnabled()) {
+      sendFeishu(`🔔 到价提醒\n${msg}\n⏰ ${timeStr}`)
+        .then(ok => console.log(ok ? '✅ 飞书已通知' : '⚠️ 飞书发送失败'))
+        .catch(() => console.log('⚠️ 飞书发送失败'));
+    }
+  }
+}
+
+/**
+ * 持仓监控：根据 config.json positions 段计算浮盈亏 + 止损/止盈位
+ *  - 每轮打印持仓状态
+ *  - 止损位/止盈位自动监控（跌破止损 / 触及止盈 → macOS + 飞书通知，每个价位只触发一次）
+ */
+function checkPosition(stock, data) {
+  if (!data || !currentConfig?.positions) return;
+  const posConfig = currentConfig.positions[stock.code];
+  if (!posConfig) return;
+
+  const price = Number(data.currentPrice);
+  if (!Number.isFinite(price)) return;
+
+  const summary = summarizePosition({ ...posConfig, code: stock.code }, { price });
+  if (!summary) return;
+  const levels = calcStopLevels(price, data.indicators || {});
+  const text = formatPositionStatus(summary, levels);
+  if (text) console.log(text);
+
+  // 止损/止盈自动监控（每个价位只触发一次，防重复）
+  const fireAndNotify = (key, dir, levelPrice, label) => {
+    if (positionLevelFired.get(key)) return;
+    const hit = dir === 'above' ? price >= levelPrice : price <= levelPrice;
+    if (!hit) return;
+    positionLevelFired.set(key, true);
+    const arrow = dir === 'above' ? '📈 触及' : '📉 跌破';
+    const msg = `${summary.name || stock.code} 现价 ${price} ${arrow} ${levelPrice.toFixed(2)} → ${label}`;
+    const timeStr = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    console.log(`🔔 [${timeStr}] ${msg}`);
+
+    const notificationScript = `display notification ${JSON.stringify(msg)} with title ${JSON.stringify('💰 持仓提醒')} sound name "Glass"`;
+    exec(`osascript -e ${JSON.stringify(notificationScript)}`, error => {
+      if (error) console.error('持仓桌面通知失败：', error.message);
+    });
+
+    if (isFeishuEnabled()) {
+      sendFeishu(`💰 持仓提醒\n${msg}\n⏰ ${timeStr}`)
+        .then(ok => console.log(ok ? '✅ 飞书已通知' : '⚠️ 飞书发送失败'))
+        .catch(() => console.log('⚠️ 飞书发送失败'));
+    }
+  };
+
+  if (levels.stopLoss != null) {
+    fireAndNotify(`${stock.code}:sl:${levels.stopLoss.toFixed(2)}`, 'below', levels.stopLoss, `止损位 ${levels.stopLoss.toFixed(2)}（-${Math.abs(levels.stopLossPct).toFixed(1)}%）`);
+  }
+  if (levels.takeProfit != null) {
+    fireAndNotify(`${stock.code}:tp:${levels.takeProfit.toFixed(2)}`, 'above', levels.takeProfit, `止盈位 ${levels.takeProfit.toFixed(2)}（+${levels.takeProfitPct.toFixed(1)}%）`);
+  }
+}
+
 function persistPriceRecord(stock, data) {
   if (!data) return;
   const indicatorsJson = data.indicators ? JSON.stringify(data.indicators) : null;
@@ -854,6 +953,10 @@ async function main() {
   console.log('='.repeat(60));
   
   console.log(`🔔 价格提醒阈值: ${alertThreshold}%`);
+  const alertCount = Object.values(currentConfig.alerts || {}).reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0);
+  if (alertCount > 0) {
+    console.log(`🎯 到价监控: ${alertCount} 个关键位已加载${isFeishuEnabled() ? '（飞书通知已启用）' : ''}`);
+  }
   // 启动调度
   scheduleNextTick(0, currentConfig, currentStocks, alertThreshold);
 }
@@ -881,11 +984,13 @@ async function updatePrices(stocks, alertThreshold) {
       innerVolume: data.innerVolume,
       currentPrice: data.currentPrice
     };
-    const signal = calcTradingSignal(data.indicators, latestBucket, timeseries, quote);
+    const signal = calcTradingSignal(data.indicators, latestBucket, timeseries, quote, data.historyContext);
     console.log(formatSignalSummary(signal));
     if (shouldNotifyStock(stock, data, alertThreshold)) {
       notifyStock(stock, data, alertThreshold);
     }
+    checkKeyLevels(stock, data);
+    checkPosition(stock, data);
   });
   
   console.log('='.repeat(60));
@@ -976,7 +1081,7 @@ async function runEodRoutine(stocks) {
       innerVolume: data.innerVolume,
       currentPrice: data.currentPrice
     };
-    const signal = calcTradingSignal(data.indicators, latestBucket, timeseries, quote);
+    const signal = calcTradingSignal(data.indicators, latestBucket, timeseries, quote, data.historyContext);
     const rationale = Array.isArray(signal.rationale) ? signal.rationale.join('; ') : (signal.rationale || '');
     insertStrategyPush.run(
       todayStr,
@@ -1073,4 +1178,4 @@ if (isMain) {
   });
 }
 
-export { calculateIndicators, fetchStockHistory };
+export { calculateIndicators, fetchStockHistory, buildHistoryContext };

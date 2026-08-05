@@ -3,3 +3,5 @@ node_modules/
 *.log
 .DS_Store
 .watchprice-export/
+watchprice.db
+*.db

@@ -7,7 +7,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
-import { calculateIndicators, fetchStockHistory } from '../index.js';
+import { calculateIndicators, fetchStockHistory, buildHistoryContext } from '../index.js';
 import { calcTradingSignal } from '../lib/trading-signal.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,7 +52,8 @@ async function run() {
       const nextClose = klines[i + 1].close;
       const date = toDateStr(klines[i].time);
       const quote = { currentPrice: close };
-      const signal = calcTradingSignal(indicators, null, [], quote);
+      const history = buildHistoryContext(slice);
+      const signal = calcTradingSignal(indicators, null, [], quote, history);
 
       const isBuy = signal.action === '买入' || signal.action === '略偏买入';
       const isSell = signal.action === '卖出' || signal.action === '略偏卖出';
