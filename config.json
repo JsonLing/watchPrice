@@ -21,7 +21,7 @@
   "positions": {
     "sz001696": {
       "name": "宗申动力",
-      "available": 1100,
+      "available": 1400,
       "lots": [
         {
           "shares": 1000,
@@ -30,10 +30,10 @@
           "note": "早期建仓"
         },
         {
-          "shares": 1100,
+          "shares": 400,
           "costPrice": 15.61,
           "date": "2026-08-05",
-          "note": "8/5 加仓"
+          "note": "8/5 加仓 (8/6 减仓700@15.32)"
         }
       ]
     },
