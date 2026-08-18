@@ -14,6 +14,11 @@
       "name": "雪人集团",
       "code": "sz002639",
       "source": "auto"
+    },
+    {
+      "name": "蓝色光标",
+      "code": "sz300058",
+      "source": "auto"
     }
   ],
   "updateInterval": 5000,
@@ -24,16 +29,28 @@
       "available": 1400,
       "lots": [
         {
-          "shares": 1000,
+          "shares": 300,
           "costPrice": 35.70,
           "date": "2026-06-01",
-          "note": "早期建仓"
+          "note": "早期建仓 (8/6减700@15.32, 8/7再减700@15.89)"
         },
         {
           "shares": 400,
           "costPrice": 15.61,
           "date": "2026-08-05",
-          "note": "8/5 加仓 (8/6 减仓700@15.32)"
+          "note": "8/5 加仓"
+        },
+        {
+          "shares": 700,
+          "costPrice": 15.15,
+          "date": "2026-08-07",
+          "note": "8/7 做T买入 (15.15买/15.89卖)"
+        },
+        {
+          "shares": 700,
+          "costPrice": 15.71,
+          "date": "2026-08-10",
+          "note": "8/10 加仓"
         }
       ]
     },
@@ -60,15 +77,37 @@
           "note": "持仓"
         }
       ]
+    },
+    "sz300058": {
+      "name": "蓝色光标",
+      "available": 500,
+      "lots": [
+        {
+          "shares": 500,
+          "costPrice": 16.4,
+          "date": "",
+          "note": "持仓"
+        }
+      ]
     }
   },
   "alerts": {
     "sz001696": [
       { "price": 17.60, "label": "反弹目标 17.60 (减仓1/3)", "dir": "above" },
       { "price": 15.73, "label": "MA20 15.73 (站稳持有)", "dir": "above" },
-      { "price": 15.33, "label": "跌破 15.33 (减仓1/3)", "dir": "below" },
+      { "price": 15.33, "label": "跌破 15.33 (减仓1/3) [已触发]", "dir": "below" },
       { "price": 14.86, "label": "跌破 MA5 14.86 (再减1/3)", "dir": "below" },
-      { "price": 13.57, "label": "跌破 13.57 (清仓)", "dir": "below" }
+      { "price": 13.57, "label": "跌破 13.57 (清仓)", "dir": "below" },
+      { "price": 13.57, "label": "超跌加仓点 13.57 (近20日低点)", "dir": "add" }
+    ],
+    "sh601288": [
+      { "price": 6.25, "label": "加仓点 6.25 (20日低点区)", "dir": "add" },
+      { "price": 5.85, "label": "加仓点 5.85 (60日低点区)", "dir": "add" }
+    ],
+    "sz002639": [
+      { "price": 12.90, "label": "反弹减仓 12.90 (压力位区)", "dir": "above" },
+      { "price": 10.95, "label": "加仓点 10.95 (10日低点区)", "dir": "add" },
+      { "price": 10.50, "label": "加仓点 10.50 (20日/60日低点)", "dir": "add" }
     ]
   },
   "marketWindows": [

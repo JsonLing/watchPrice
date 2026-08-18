@@ -833,7 +833,36 @@ function checkPosition(stock, data) {
   const summary = summarizePosition({ ...posConfig, code: stock.code }, { price });
   if (!summary) return;
   const levels = calcStopLevels(price, data.indicators || {});
-  const text = formatPositionStatus(summary, levels);
+
+  // 从 alerts 推导下一个减仓点 / 加仓点（未触发的点位）
+  const ops = { reduceBelow: null, reduceAbove: null, addPoint: null, firedLabels: [] };
+  const alerts = (currentConfig.alerts || {})[stock.code];
+  if (Array.isArray(alerts)) {
+    const pending = []; // 未触发点位
+    for (const level of alerts) {
+      const lv = Number(level.price);
+      if (!Number.isFinite(lv)) continue;
+      const key = `${stock.code}:${lv}`;
+      const dir = level.dir || 'below';
+      if (keyLevelFired.get(key)) {
+        // 已触发：记录标记（只记 below 方向的减仓触发）
+        if (dir === 'below') ops.firedLabels.push(`${lv.toFixed(2)}✅`);
+        continue;
+      }
+      pending.push({ price: lv, label: level.label || '关键位', dir });
+    }
+    // 下方最近减仓点（below, price < 现价，取最高）
+    const below = pending.filter(p => p.dir === 'below' && p.price < price).sort((a, b) => b.price - a.price);
+    if (below.length) ops.reduceBelow = below[0];
+    // 上方最近反弹减仓点（above, price > 现价，取最低）
+    const above = pending.filter(p => p.dir === 'above' && p.price > price).sort((a, b) => a.price - b.price);
+    if (above.length) ops.reduceAbove = above[0];
+    // 加仓点（add, price < 现价，取最高）
+    const adds = pending.filter(p => p.dir === 'add' && p.price < price).sort((a, b) => b.price - a.price);
+    if (adds.length) ops.addPoint = adds[0];
+  }
+
+  const text = formatPositionStatus(summary, levels, ops);
   if (text) console.log(text);
 
   // 止损/止盈自动监控（每个价位只触发一次，防重复）
